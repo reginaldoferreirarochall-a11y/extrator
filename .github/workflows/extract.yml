@@ -1,0 +1,59 @@
+name: Extrair contatos
+
+on:
+  workflow_dispatch:
+    inputs:
+      nicho:
+        description: 'Nicho (ex.: vidraçaria)'
+        required: true
+        type: string
+      regiao:
+        description: 'Região (ex.: Suzano SP)'
+        required: true
+        type: string
+      qtd:
+        description: 'Quantidade'
+        required: true
+        default: '20'
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: extrator
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Preparar busca
+        run: echo "${{ inputs.nicho }} em ${{ inputs.regiao }}" > queries.txt
+      - name: Buscar no Google Maps (gosom)
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work gosom/google-maps-scraper:latest -input queries.txt -results results.csv -depth 1 || true
+          ls -la
+      - name: Gravar no banco (sem duplicar)
+        env:
+          EXTRACT_REGIAO: ${{ inputs.regiao }}
+        run: |
+          npm install --no-save @neondatabase/serverless
+          node insert-leads.js results.csv "${{ inputs.qtd }}"
+      - name: Atualizar a lista da página
+        run: node leads.js
+      - name: Publicar lista
+        run: |
+          git config user.name "Extrator"
+          git config user.email "actions@github.com"
+          git add docs/leads.json
+          git commit -m "Lista atualizada" || echo "sem mudanças"
+          git pull --rebase origin main || true
+          git push || echo "push falhou — a próxima rodada resolve"
